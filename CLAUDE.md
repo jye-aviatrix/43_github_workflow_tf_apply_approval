@@ -4,57 +4,82 @@ Guidance for Claude Code when working in this repository.
 
 ## Repository purpose
 
-This repo contains one GitHub Actions workflow plus the Terraform source it drives:
+Public reference implementation of a `plan → risk-assessment → approval → apply` GitHub Actions pipeline for Terraform, backed by Terraform Cloud. The Terraform target is an Aviatrix AWS spoke + transit fabric, but the workflow itself is provider-agnostic.
 
-- `.github/workflows/workflow-tf-apply-approval.yaml` — dispatchable pipeline that runs `terraform plan` / `apply` / `destroy`.
-- `workflow-tf-apply-approval/` — the Terraform root module (Aviatrix multi-cloud spoke via `terraform-aviatrix-modules/mc-spoke/aviatrix`). State is stored in **Terraform Cloud** (`app.terraform.io`, workspace `43_github_workflow_tf_apply_approval`; org is supplied at runtime via the `TF_CLOUD_ORGANIZATION` env var).
+- `.github/workflows/workflow-tf-apply-approval.yaml` — the dispatchable pipeline (two jobs: plan+risk-assess, then gated apply).
+- `.github/scripts/risk-assess.py` — evaluates `terraform show -json` against `risk-rules.yaml` and writes a Markdown report to `$GITHUB_STEP_SUMMARY`.
+- `risk-rules.yaml` — YAML match rules mapping resource changes → severity + rationale.
+- `workflow-tf-apply-approval/` — the Terraform root module.
 
-The repo's name refers to a plan → risk-assessment → approval → apply gate that is being introduced. New workflow changes for that gate should be labeled/tagged as **enhancement** — see the section at the bottom of this file.
+New workflow changes for the approval-gate work should be tagged **enhancement** in the commit subject.
 
 ## Workflow shape (`.github/workflows/workflow-tf-apply-approval.yaml`)
 
-Preserve this shape when editing:
+Two jobs — preserve this shape when editing:
 
-- **Trigger:** `workflow_dispatch` with inputs `action` (`plan`|`apply`|`destroy`, default `plan`), `workspace` (choice — currently only `43_github_workflow_tf_apply_approval`), and `environ` (choice — currently only `prod`).
-- **Environment binding:** `environment: ${{ inputs.environ }}` — this binds the run to a GitHub environment for secret scoping. Required secrets in that environment:
-  - `CONTROLLER_ADMIN_PASSWORD` (Aviatrix controller admin password)
-  - `CONTROLLER_IP` (Aviatrix controller IP or hostname)
-  - `AVIATRIX_ACCOUNT` (Aviatrix cloud access account name, passed as `TF_VAR_aviatrix_account`)
-  - `TF_CLOUD_ORGANIZATION` (Terraform Cloud org name — read via the `TF_CLOUD_ORGANIZATION` env var at init time so it isn't hardcoded in `providers.tf`)
-  - `TF_API_TOKEN` (TFC user/team token used by `setup-terraform`)
+### `plan` job (renamed at runtime by action)
+- Displayed as `Plan and Risk Assessment` or `Destroy Plan and Risk Assessment` depending on `inputs.action`.
+- Uses `environment: ${{ inputs.environ }}` (currently `prod`) for secret scoping.
+- Runs `terraform plan` (or `plan -destroy`), then `terraform show -json the_plan > plan.json`, then `risk-assess.py` which appends a colored Markdown report to `$GITHUB_STEP_SUMMARY`.
+- Uploads `the_plan`, `plan.json`, `plan.out`, `risk-report.md` as an artifact named `tf-plan-${{ github.run_id }}` when `inputs.action` is `plan_apply` or `destroy`.
+
+### `apply` job (gated)
+- Displayed as `Apply (gated)` or `Destroy (gated)`; the terraform step renames to `Terraform Destroy` when acting on a `-destroy` plan.
+- Guarded by `if: inputs.action == 'plan_apply' || inputs.action == 'destroy'` — skipped for `plan`-only runs.
+- Uses `environment: ${{ inputs.environ }}-apply` (currently `prod-apply`). **This is the approval gate** — configure Required reviewers in repo Settings → Environments → `prod-apply`.
+- Downloads the plan artifact and runs `terraform apply the_plan`. Because the plan was produced with `-out=the_plan`, this same command performs the destroy when the plan was `-destroy`.
+
+### Required secrets (in both `prod` and `prod-apply` environments)
+- `CONTROLLER_ADMIN_PASSWORD` — Aviatrix controller admin password (`TF_VAR_controller_password`)
+- `CONTROLLER_IP` — Aviatrix controller IP or hostname (`TF_VAR_controller_ip`)
+- `AVIATRIX_ACCOUNT` — Aviatrix cloud access account name (`TF_VAR_aviatrix_account`)
+- `TF_CLOUD_ORGANIZATION` — TFC organization; read at `terraform init` time via the env var of the same name, so `providers.tf` doesn't hardcode it
+- `TF_API_TOKEN` — TFC user/team token used by `hashicorp/setup-terraform`
+
+The plan job has an early `Verify required secrets` step that fails fast if any of the above are empty (`TF_API_TOKEN` isn't checked because `setup-terraform` will fail loudly on its own).
+
+### Runner + shell notes
 - **Runner:** `self-hosted` (an Ubuntu runner with network reach to the Aviatrix controller). Do NOT change to `ubuntu-latest` unless the controller is reachable from GitHub-hosted runners.
-- **Default shell:** `bash --noprofile --norc -eo pipefail {0}` — the `pipefail` matters: several steps pipe through `tee`, and without it a failing `terraform` command would be masked by `tee`'s zero exit.
-- **TFC workspace selector:** pinned by `name` in `providers.tf`. `TF_WORKSPACE` is deliberately NOT set — it would conflict with the `name` selector at `terraform init`. The `workspace` input is used only to pick the `.tfvars` filename.
-- **Step order:** `checkout` → `Verify required secrets` (fail-fast) → `checkip` → `Install unzip` → `Setup Terraform` → `fmt -check` → `init` → `validate` → `plan` (or `plan -destroy`) with `-var-file ${{inputs.workspace}}.tfvars -out=the_plan`, teed to `plan.out` → `apply the_plan` or `destroy -auto-approve`. The `.tfvars` filename must match the `workspace` input.
-- **Setup Terraform:** `hashicorp/setup-terraform@v3` with `terraform_wrapper: false` — the wrapper shims `terraform` through Node, which fails on runners without `node` on PATH. Only `cli_config_credentials_token` is passed; do NOT add `cli_config_credentials_hostname` (TFC uses the default `app.terraform.io`).
-- **Install unzip step:** `hashicorp/setup-terraform` unzips the CLI archive; a bare Ubuntu runner lacks `unzip`. Keep this step until the runner image bakes it in.
-- Commented-out `terraform untaint` scaffolding is kept intentionally — uncomment (don't rewrite) when re-enabling.
+- **Default shell:** `bash --noprofile --norc -eo pipefail {0}` — `pipefail` matters: `terraform plan | tee plan.out` would otherwise mask a failing terraform exit with `tee`'s zero exit.
+- **Install unzip step** — a fresh Ubuntu runner lacks `unzip`, which `hashicorp/setup-terraform` needs to unzip the CLI archive. Keep this step until the runner image bakes it in.
+- **`hashicorp/setup-terraform@v3`** with `terraform_wrapper: false` — the wrapper shims `terraform` through Node, which fails on runners without `node` on PATH. Only `cli_config_credentials_token` is passed; do NOT add `cli_config_credentials_hostname` (TFC uses the default `app.terraform.io`).
+- **`actions/checkout@v5`** — v5 uses node24 and silences the node20 deprecation warning. `setup-terraform@v3` still uses node20 upstream; that warning will persist until HashiCorp cuts a new release.
+
+## Risk rules (`risk-rules.yaml`)
+
+Each rule is a `match` block (all fields must match) plus a `level` (`low`/`medium`/`high`/`critical`) and a `reason`. When multiple rules match a single resource change, the **highest** level wins per resource.
+
+`match` fields (all optional; empty match matches every change):
+- `action` — one of `create` / `update` / `delete` / `read` / `no-op`
+- `resource_type` — Terraform resource type, e.g. `aviatrix_spoke_gateway`
+- `resource_address` — full address, e.g. `module.mc-spoke.aviatrix_spoke_gateway.default`
+- `attribute_changed` — resource attribute (not module input) whose before/after values differ
+
+**Attribute names must be the underlying Terraform resource attribute, not the module input.** The Aviatrix modules take an `instance_size` variable but the resource attributes are `gw_size` and `ha_gw_size` — rules must match the latter. This has bitten us; check the resource schema before writing a new rule.
+
+The report renders each level with a colored emoji dot (🟢 low, 🟡 medium, 🟠 high, 🔴 critical) followed by the level name. The `top_risk` extraction in the workflow greps for the uppercase level words, so keep them in the icon strings.
 
 ## Terraform configuration (`workflow-tf-apply-approval/`)
 
 - `providers.tf`
-  - `terraform { cloud { workspaces { name = "43_github_workflow_tf_apply_approval" } } }` — TFC backend. `organization` is intentionally omitted from source and supplied via the `TF_CLOUD_ORGANIZATION` env var at init time. Hostname is also omitted so `app.terraform.io` is used.
+  - `terraform { cloud { workspaces { name = "43_github_workflow_tf_apply_approval" } } }` — TFC backend. `organization` is intentionally omitted and supplied via `TF_CLOUD_ORGANIZATION` at init time. Hostname is omitted so `app.terraform.io` is used.
   - Aviatrix provider `AviatrixSystems/aviatrix` pinned to `3.2.2`.
-  - `provider "aviatrix"` — controller IP from `var.controller_ip`, username (`admin`), password from `var.controller_password`. `verify_ssl_certificate = false` because the controller's cert isn't in the runner's trust store.
-- `variables.tf` — declares `controller_password` (sensitive) and `controller_ip`. Both are populated from `TF_VAR_*` env in the workflow, sourced from `secrets.CONTROLLER_ADMIN_PASSWORD` and `secrets.CONTROLLER_IP`.
-- `main.tf` — one `module "mc-spoke"` block (`terraform-aviatrix-modules/mc-spoke/aviatrix` v1.7.1) creating an Azure spoke with `attached = false`.
-- `43_github_workflow_tf_apply_approval.tfvars` — empty file. Exists because `terraform plan -var-file ...` requires it; all variables currently come from `TF_VAR_*` env.
+  - `provider "aviatrix"` — controller IP from `var.controller_ip`, username hardcoded (`admin`), password from `var.controller_password`. `verify_ssl_certificate = false`.
+- `variables.tf` — `controller_password` (sensitive), `controller_ip`, `aviatrix_account`. All populated from `TF_VAR_*` env in the workflow.
+- `main.tf` — `module "mc-spoke"` + `module "mc-transit"` (both `terraform-aviatrix-modules/*/aviatrix`), currently in AWS `us-east-1`, spoke attached to transit, `ha_gw = false`, `instance_size = "t3.small"`.
+- `43_github_workflow_tf_apply_approval.tfvars` — empty. Exists because `terraform plan -var-file ...` requires it; all variables come from `TF_VAR_*` env.
 
 ## TFC workspace settings that matter
 
-- **Execution Mode: Local** — must be set in the TFC UI. If left at the default Remote, TFC runs the plan on its shared cloud runners, which cannot reach the private controller IP.
-- Workspace is selected by `name` (not tags), so `TF_WORKSPACE` must remain unset in the workflow.
+- **Execution Mode: Local** — must be set in the TFC UI. If left at the default Remote, TFC runs the plan on its shared cloud runners, which cannot reach the controller.
+- Workspace is selected by `name`, so `TF_WORKSPACE` must remain unset (it would conflict at `init`).
 
 ## Editing tips
 
-- Adding another workspace target means: (1) add to the `workspace` input `options`, (2) create `<name>.tfvars`, (3) create a matching TFC workspace and update `providers.tf` (since `name` is single-valued, multi-workspace routing would require switching to a `tags` selector — that decision is not made yet).
-- No local build/lint/test — validation is via `workflow_dispatch` with `action: plan`.
+- Adding another workspace target: (1) add to the `workspace` input `options`, (2) create `<name>.tfvars`, (3) create a matching TFC workspace, (4) update `providers.tf` (or switch from `name` to `tags` selector — that decision is not made yet).
+- Testing changes: `workflow_dispatch` with `action: plan` — the plan job runs the risk assessment and won't touch the apply gate.
+- When you add a new risk rule, dispatch a plan and inspect the run summary to confirm your match landed. Silent misses are common when attribute names differ between module input and resource schema.
 
-## Upcoming refactor: plan → risk-assessment → approval → apply
+## History
 
-We are refactoring the workflow so that `terraform apply` cannot run until:
-1. A `terraform plan` has been captured.
-2. A risk assessment / review is performed on that plan.
-3. A human approval gate passes.
-
-**Any workflow change made for this refactor must be labeled `enhancement`** (PR label / commit tag). Preserve the current step order and env plumbing; add the gate between plan and apply rather than restructuring around it.
+The repo was rebuilt from scratch after prior commits contained internal company references. `git init` was done once with a single root commit; there is intentionally no earlier history.
