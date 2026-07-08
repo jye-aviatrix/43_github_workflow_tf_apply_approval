@@ -11,6 +11,7 @@ module "mc-spoke" {
   ha_gw         = false
   transit_gw    = module.mc-transit.transit_gateway.gw_name
   instance_size = "t3.small"
+  tags = {env = "prod"}
 }
 
 module "mc-transit" {
@@ -24,4 +25,5 @@ module "mc-transit" {
   cidr          = "10.1.2.0/24"
   ha_gw         = false
   instance_size = "t3.small"
+  tags = {env = "prod"}
 }
