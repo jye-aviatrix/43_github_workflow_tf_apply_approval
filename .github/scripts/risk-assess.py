@@ -47,41 +47,80 @@ def changed_attrs(change: dict) -> set[str]:
     return {k for k in keys if before.get(k) != after.get(k)}
 
 
-def rule_matches(rule: dict, resource: dict, change: dict) -> bool:
+def rule_matches(rule: dict, resource: dict, actions: list[str], attribute: str | None) -> bool:
     m = rule.get("match") or {}
     if not m:
         return True
-    if "action" in m and m["action"] not in change.get("actions", []):
+    if "action" in m and m["action"] not in actions:
         return False
     if "resource_type" in m and m["resource_type"] != resource.get("type"):
         return False
     if "resource_address" in m and m["resource_address"] != resource.get("address"):
         return False
-    if "attribute_changed" in m and m["attribute_changed"] not in changed_attrs(change):
-        return False
+    if "attribute_changed" in m:
+        if attribute is None or m["attribute_changed"] != attribute:
+            return False
     return True
+
+
+def pick_top(matched: list[dict]) -> dict:
+    return min(matched, key=lambda r: LEVEL_RANK[r["level"]])
 
 
 def assess(plan_json: dict, rules: list[dict]) -> list[dict]:
     findings = []
     for rc in plan_json.get("resource_changes", []):
-        actions = rc.get("change", {}).get("actions", [])
+        change = rc.get("change", {})
+        actions = change.get("actions", [])
         if actions == ["no-op"] or actions == ["read"]:
             continue
-        matched = [r for r in rules if rule_matches(r, rc, rc.get("change", {}))]
+
+        # For update actions, emit one finding per changed attribute so
+        # attribute-level risks (e.g. tags) aren't hidden behind a higher-
+        # severity match on a sibling attribute of the same resource.
+        if actions == ["update"]:
+            attrs = sorted(changed_attrs(change))
+            emitted_any = False
+            for attr in attrs:
+                matched = [r for r in rules if rule_matches(r, rc, actions, attr)]
+                if not matched:
+                    continue
+                top = pick_top(matched)
+                findings.append(
+                    {
+                        "address": rc.get("address"),
+                        "type": rc.get("type"),
+                        "actions": actions,
+                        "attribute": attr,
+                        "level": top["level"],
+                        "reason": top["reason"].strip(),
+                    }
+                )
+                emitted_any = True
+            if emitted_any:
+                continue
+            # No per-attribute rule matched; fall through to a
+            # whole-resource evaluation so generic action-only rules
+            # still apply.
+
+        matched = [r for r in rules if rule_matches(r, rc, actions, None)]
         if not matched:
             continue
-        top = min(matched, key=lambda r: LEVEL_RANK[r["level"]])
+        top = pick_top(matched)
         findings.append(
             {
                 "address": rc.get("address"),
                 "type": rc.get("type"),
                 "actions": actions,
+                "attribute": None,
                 "level": top["level"],
                 "reason": top["reason"].strip(),
             }
         )
-    findings.sort(key=lambda f: (LEVEL_RANK[f["level"]], f["address"]))
+
+    findings.sort(
+        key=lambda f: (LEVEL_RANK[f["level"]], f["address"], f["attribute"] or "")
+    )
     return findings
 
 
@@ -106,12 +145,15 @@ def render_markdown(findings: list[dict]) -> str:
 
     lines.append("## Findings")
     lines.append("")
-    lines.append("| Level | Action | Resource | Rationale |")
-    lines.append("|---|---|---|---|")
+    lines.append("| Level | Action | Resource | Attribute | Rationale |")
+    lines.append("|---|---|---|---|---|")
     for f in findings:
         actions = ", ".join(f["actions"])
         reason = f["reason"].replace("\n", " ")
-        lines.append(f"| {LEVEL_ICON[f['level']]} | `{actions}` | `{f['address']}` | {reason} |")
+        attr = f"`{f['attribute']}`" if f["attribute"] else "—"
+        lines.append(
+            f"| {LEVEL_ICON[f['level']]} | `{actions}` | `{f['address']}` | {attr} | {reason} |"
+        )
     lines.append("")
     return "\n".join(lines) + "\n"
 

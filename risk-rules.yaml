@@ -142,5 +142,13 @@
 
 - match:
     action: update
+    attribute_changed: tags
+  level: low
+  reason: >-
+    Tag-only change. Updates cloud resource labels/metadata; no impact
+    to routing, connectivity, or capacity.
+
+- match:
+    action: update
   level: low
   reason: In-place attribute update.
