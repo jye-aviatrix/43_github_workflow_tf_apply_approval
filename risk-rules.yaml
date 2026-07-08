@@ -50,8 +50,8 @@
   reason: >-
     Provisioning a new Aviatrix transit gateway. This launches a
     dedicated VM (and its HA peer if enabled) in the cloud VPC/VNet and
-    incurs ongoing hourly compute + data-transfer cost. Transit gateways
-    are foundational to the fabric topology.
+    incurs ongoing hourly compute cost. Transit gateways are
+    foundational to the fabric topology.
 
 - match:
     action: create
@@ -60,7 +60,7 @@
   reason: >-
     Provisioning a new Aviatrix spoke gateway. Launches a dedicated VM
     (and its HA peer if enabled) in the target VPC/VNet and incurs
-    ongoing hourly compute + data-transfer cost.
+    ongoing hourly compute cost.
 
 - match:
     action: create
