@@ -73,7 +73,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y unzip
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
           terraform_wrapper: false
@@ -125,7 +125,7 @@ jobs:
 
       - name: Upload plan artifacts
         if: ${{ inputs.action == 'plan_apply' || inputs.action == 'destroy' }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: tf-plan-${{ github.run_id }}
           path: |
