@@ -3,9 +3,9 @@ module "mc-spoke" {
   version = "1.7.1"
 
   account  = var.aviatrix_account
-  region   = "East US"
-  name     = "eus-spoke1"
-  cloud    = "Azure"
+  region   = "us-east-1"
+  name     = "ue1spoke1"
+  cloud    = "AWS"
   cidr     = "10.1.1.0/24"
   attached = false
 }
