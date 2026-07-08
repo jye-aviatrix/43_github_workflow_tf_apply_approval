@@ -7,7 +7,7 @@ module "mc-spoke" {
   name       = "ue1spoke1"
   cloud      = "AWS"
   cidr       = "10.1.1.0/24"
-  attached   = false
+  attached   = true
   ha_gw      = false
   transit_gw = module.mc-transit.transit_gateway.gw_name
 }
