@@ -45,9 +45,41 @@
 
 - match:
     action: create
+    resource_type: aviatrix_transit_gateway
+  level: low
+  reason: >-
+    Provisioning a new Aviatrix transit gateway. This launches a
+    dedicated VM (and its HA peer if enabled) in the cloud VPC/VNet and
+    incurs ongoing hourly compute + data-transfer cost. Transit gateways
+    are foundational to the fabric topology.
+
+- match:
+    action: create
     resource_type: aviatrix_spoke_gateway
   level: low
-  reason: Provisioning a new spoke gateway consumes cloud resources.
+  reason: >-
+    Provisioning a new Aviatrix spoke gateway. Launches a dedicated VM
+    (and its HA peer if enabled) in the target VPC/VNet and incurs
+    ongoing hourly compute + data-transfer cost.
+
+- match:
+    action: create
+    resource_type: aviatrix_spoke_transit_attachment
+  level: low
+  reason: >-
+    Attaching a spoke to a transit gateway. Establishes IPSec/underlay
+    tunnels between the two gateways and injects the spoke's CIDR into
+    the transit's route table — the spoke's workloads become reachable
+    across the fabric once this applies.
+
+- match:
+    action: create
+    resource_type: aviatrix_vpc
+  level: low
+  reason: >-
+    Registering a new VPC/VNet with the Aviatrix controller (or creating
+    one via the controller). Consumes an IP block from the account's
+    address space and adds a fabric-managed network.
 
 - match:
     action: create
