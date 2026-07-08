@@ -64,10 +64,11 @@
     gateways are resized sequentially, and during each resize traffic
     shifts to the remaining peers. Before applying: (1) evaluate the
     current number of tunnels terminating on the transit gateway,
-    (2) engage Aviatrix support to perform each transit resize manually via the controller, then followed by an image upgrade if current tunnel count exceeds 3K
-    inside an approved change window, then (3) update the instance_size
-    in this pipeline to match the new size so state converges without a
-    second resize.
+    (2) engage Aviatrix support to perform each transit resize manually
+    via the controller inside an approved change window (followed by an
+    image upgrade if the current tunnel count exceeds 3K), then
+    (3) update the instance_size in this pipeline to match the new size
+    so state converges without a second resize.
 
 - match:
     action: create
