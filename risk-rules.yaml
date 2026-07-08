@@ -46,7 +46,17 @@
 - match:
     action: update
     resource_type: aviatrix_spoke_gateway
-    attribute_changed: instance_size
+    attribute_changed: gw_size
+  level: medium
+  reason: >-
+    Terraform cannot resize an individual gateway in isolation — gateways
+    are resized sequentially, and during each resize traffic shifts to the
+    remaining peers. Plan the change inside an approved change window.
+
+- match:
+    action: update
+    resource_type: aviatrix_spoke_gateway
+    attribute_changed: ha_gw_size
   level: medium
   reason: >-
     Terraform cannot resize an individual gateway in isolation — gateways
@@ -56,7 +66,7 @@
 - match:
     action: update
     resource_type: aviatrix_transit_gateway
-    attribute_changed: instance_size
+    attribute_changed: gw_size
   level: critical
   reason: >-
     Transit gateway resize is disruptive to fabric-wide connectivity.
@@ -67,8 +77,25 @@
     (2) engage Aviatrix support to perform each transit resize manually
     via the controller inside an approved change window (followed by an
     image upgrade if the current tunnel count exceeds 3K), then
-    (3) update the instance_size in this pipeline to match the new size
-    so state converges without a second resize.
+    (3) update the gw_size in this pipeline to match the new size so
+    state converges without a second resize.
+
+- match:
+    action: update
+    resource_type: aviatrix_transit_gateway
+    attribute_changed: ha_gw_size
+  level: critical
+  reason: >-
+    Transit gateway resize is disruptive to fabric-wide connectivity.
+    Terraform cannot resize an individual transit gateway in isolation —
+    gateways are resized sequentially, and during each resize traffic
+    shifts to the remaining peers. Before applying: (1) evaluate the
+    current number of tunnels terminating on the transit gateway,
+    (2) engage Aviatrix support to perform each transit resize manually
+    via the controller inside an approved change window (followed by an
+    image upgrade if the current tunnel count exceeds 3K), then
+    (3) update the ha_gw_size in this pipeline to match the new size so
+    state converges without a second resize.
 
 - match:
     action: create
