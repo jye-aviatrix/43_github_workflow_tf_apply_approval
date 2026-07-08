@@ -57,11 +57,17 @@
     action: update
     resource_type: aviatrix_transit_gateway
     attribute_changed: instance_size
-  level: medium
+  level: critical
   reason: >-
-    Terraform cannot resize an individual gateway in isolation — gateways
-    are resized sequentially, and during each resize traffic shifts to the
-    remaining peers. Plan the change inside an approved change window.
+    Transit gateway resize is disruptive to fabric-wide connectivity.
+    Terraform cannot resize an individual transit gateway in isolation —
+    gateways are resized sequentially, and during each resize traffic
+    shifts to the remaining peers. Before applying: (1) evaluate the
+    current number of tunnels terminating on the transit gateway,
+    (2) engage Aviatrix support to perform each transit resize manually via the controller, then followed by an image upgrade if current tunnel count exceeds 3K
+    inside an approved change window, then (3) update the instance_size
+    in this pipeline to match the new size so state converges without a
+    second resize.
 
 - match:
     action: create
