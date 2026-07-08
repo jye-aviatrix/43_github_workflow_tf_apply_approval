@@ -29,6 +29,7 @@ jobs:
   # enhancement: plan job now also runs the risk assessment and uploads
   # the raw plan + JSON so the gated apply job can reuse it.
   plan:
+    name: ${{ inputs.action == 'destroy' && 'Destroy Plan and Risk Assessment' || 'Plan and Risk Assessment' }}
     environment: ${{ inputs.environ }}
     runs-on: self-hosted
     env:
@@ -142,6 +143,7 @@ jobs:
   # artifact and runs `terraform apply the_plan` (which also performs
   # `destroy` when the plan was `-destroy`).
   apply:
+    name: ${{ inputs.action == 'destroy' && 'Destroy (gated)' || 'Apply (gated)' }}
     if: ${{ inputs.action == 'plan_apply' || inputs.action == 'destroy' }}
     needs: plan
     environment: ${{ inputs.environ }}-apply
@@ -178,5 +180,5 @@ jobs:
           name: tf-plan-${{ github.run_id }}
           path: ${{ github.workspace }}
 
-      - name: Terraform Apply
+      - name: ${{ inputs.action == 'destroy' && 'Terraform Destroy' || 'Terraform Apply' }}
         run: terraform apply -compact-warnings the_plan | tee "${{ github.workspace }}/apply.out"
