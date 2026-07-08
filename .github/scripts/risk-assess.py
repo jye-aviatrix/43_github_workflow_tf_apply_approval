@@ -20,10 +20,10 @@ import yaml
 LEVELS = ["critical", "high", "medium", "low"]
 LEVEL_RANK = {lvl: i for i, lvl in enumerate(LEVELS)}
 LEVEL_ICON = {
-    "critical": "CRITICAL",
-    "high": "HIGH",
-    "medium": "MEDIUM",
-    "low": "LOW",
+    "critical": "🔴 CRITICAL",
+    "high": "🟠 HIGH",
+    "medium": "🟡 MEDIUM",
+    "low": "🟢 LOW",
 }
 
 
