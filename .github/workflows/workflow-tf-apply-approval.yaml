@@ -178,10 +178,5 @@ jobs:
           name: tf-plan-${{ github.run_id }}
           path: ${{ github.workspace }}
 
-      - name: Stage plan into working dir
-        run: |
-          cp "${{ github.workspace }}/workflow-tf-apply-approval/the_plan" ./the_plan || \
-            cp "${{ github.workspace }}/the_plan" ./the_plan
-
       - name: Terraform Apply
         run: terraform apply -compact-warnings the_plan | tee "${{ github.workspace }}/apply.out"
