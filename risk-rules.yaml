@@ -44,6 +44,26 @@
     the fabric.
 
 - match:
+    action: update
+    resource_type: aviatrix_spoke_gateway
+    attribute_changed: instance_size
+  level: medium
+  reason: >-
+    Terraform cannot resize an individual gateway in isolation — gateways
+    are resized sequentially, and during each resize traffic shifts to the
+    remaining peers. Plan the change inside an approved change window.
+
+- match:
+    action: update
+    resource_type: aviatrix_transit_gateway
+    attribute_changed: instance_size
+  level: medium
+  reason: >-
+    Terraform cannot resize an individual gateway in isolation — gateways
+    are resized sequentially, and during each resize traffic shifts to the
+    remaining peers. Plan the change inside an approved change window.
+
+- match:
     action: create
     resource_type: aviatrix_transit_gateway
   level: low
