@@ -1,0 +1,60 @@
+# Risk assessment rules for `terraform plan` changes.
+#
+# Each rule has a `match` block (all specified fields must match) and a
+# `level` + `reason` describing the risk. When multiple rules match a
+# single resource change, the HIGHEST level wins.
+#
+# match fields (all optional; a rule with no match block matches every change):
+#   action:            one of create | update | delete | read | no-op
+#                      (matches if present in the change's actions array)
+#   resource_type:     terraform resource type (e.g. aviatrix_spoke_gateway)
+#   resource_address:  full resource address
+#                      (e.g. module.mc-spoke.aviatrix_spoke_gateway.default)
+#   attribute_changed: attribute whose before/after values differ
+#
+# level: low | medium | high | critical
+
+- match:
+    action: delete
+    resource_type: aviatrix_transit_gateway
+  level: critical
+  reason: >-
+    Deleting a transit gateway removes core connectivity for all attached
+    spokes. Requires an explicit change window and network engineering approval.
+
+- match:
+    action: delete
+    resource_type: aviatrix_spoke_gateway
+  level: high
+  reason: >-
+    Deleting a spoke gateway disconnects the associated VNet/VPC from the
+    Aviatrix fabric.
+
+- match:
+    action: delete
+  level: medium
+  reason: Destructive change — resource will be removed.
+
+- match:
+    action: update
+    attribute_changed: cidr
+  level: high
+  reason: >-
+    Changing a CIDR block forces resource recreation and route churn on
+    the fabric.
+
+- match:
+    action: create
+    resource_type: aviatrix_spoke_gateway
+  level: low
+  reason: Provisioning a new spoke gateway consumes cloud resources.
+
+- match:
+    action: create
+  level: low
+  reason: Additive change — new resource will be created.
+
+- match:
+    action: update
+  level: low
+  reason: In-place attribute update.

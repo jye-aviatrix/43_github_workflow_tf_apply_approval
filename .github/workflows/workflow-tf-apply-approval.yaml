@@ -1,0 +1,187 @@
+name: workflow-tf-apply-approval
+run-name: "workflow-tf-apply-approval - ${{ inputs.action }}"
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options: ['plan', 'plan_apply', 'destroy']
+        default: 'plan'
+      workspace:
+        description: 'Select a workspace'
+        required: true
+        type: choice
+        options: [43_github_workflow_tf_apply_approval]
+      environ:
+        type: choice
+        description: 'Select an environment'
+        required: true
+        default: 'prod'
+        options: [prod]
+
+
+permissions:
+  contents: read
+
+jobs:
+  # enhancement: plan job now also runs the risk assessment and uploads
+  # the raw plan + JSON so the gated apply job can reuse it.
+  plan:
+    environment: ${{ inputs.environ }}
+    runs-on: self-hosted
+    env:
+      TF_VAR_environment: ${{ inputs.environ }}
+      TF_VAR_controller_password: ${{ secrets.CONTROLLER_ADMIN_PASSWORD }}
+      TF_VAR_controller_ip: ${{ secrets.CONTROLLER_IP }}
+      TF_VAR_aviatrix_account: ${{ secrets.AVIATRIX_ACCOUNT }}
+      TF_CLOUD_ORGANIZATION: ${{ secrets.TF_CLOUD_ORGANIZATION }}
+    defaults:
+      run:
+        working-directory: "workflow-tf-apply-approval"
+        shell: bash --noprofile --norc -eo pipefail {0}
+    outputs:
+      top_risk: ${{ steps.risk.outputs.top_risk }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Verify required secrets
+        run: |
+          missing=0
+          for s in CONTROLLER_ADMIN_PASSWORD CONTROLLER_IP AVIATRIX_ACCOUNT TF_CLOUD_ORGANIZATION; do
+            if [ -z "${!s}" ]; then
+              echo "Missing secret: $s"
+              missing=1
+            fi
+          done
+          if [ $missing -ne 0 ]; then
+            exit 1
+          fi
+        env:
+          CONTROLLER_ADMIN_PASSWORD: ${{ secrets.CONTROLLER_ADMIN_PASSWORD }}
+          CONTROLLER_IP: ${{ secrets.CONTROLLER_IP }}
+          AVIATRIX_ACCOUNT: ${{ secrets.AVIATRIX_ACCOUNT }}
+          TF_CLOUD_ORGANIZATION: ${{ secrets.TF_CLOUD_ORGANIZATION }}
+
+      - name: checkip
+        run: hostname -I
+
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+
+      - name: Terraform Format
+        run: terraform fmt -check
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        if: ${{ inputs.action == 'plan' || inputs.action == 'plan_apply' }}
+        run: terraform plan -var-file ${{ inputs.workspace }}.tfvars -out=the_plan -input=false | tee "${{ github.workspace }}/plan.out"
+
+      - name: Terraform Destroy Plan
+        if: ${{ inputs.action == 'destroy' }}
+        run: terraform plan -destroy -var-file ${{ inputs.workspace }}.tfvars -out=the_plan -input=false | tee "${{ github.workspace }}/plan.out"
+
+      - name: Terraform Show (JSON)
+        run: terraform show -json the_plan > "${{ github.workspace }}/plan.json"
+
+      # enhancement: risk assessment step. Reads plan.json, matches against
+      # risk-rules.yaml, writes a Markdown report to the run summary.
+      - name: Install PyYAML
+        run: sudo apt-get install -y python3-yaml
+
+      - name: Risk assessment
+        id: risk
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 .github/scripts/risk-assess.py \
+            --plan-json plan.json \
+            --rules risk-rules.yaml \
+            --report-out risk-report.md
+          # Extract highest level for downstream visibility.
+          top=$(python3 -c "
+          import json, sys
+          from pathlib import Path
+          rules_out = Path('risk-report.md').read_text()
+          for lvl in ['critical','high','medium','low']:
+              if lvl.upper() in rules_out:
+                  print(lvl); sys.exit(0)
+          print('none')
+          ")
+          echo "top_risk=${top}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload plan artifacts
+        if: ${{ inputs.action == 'plan_apply' || inputs.action == 'destroy' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-plan-${{ github.run_id }}
+          path: |
+            workflow-tf-apply-approval/the_plan
+            plan.json
+            plan.out
+            risk-report.md
+          retention-days: 7
+          if-no-files-found: error
+
+  # enhancement: gated apply job. GitHub Environment `<environ>-apply` must
+  # be configured with Required reviewers in repo Settings → Environments.
+  # The reviewer sees the risk report on the plan job's summary before
+  # approving; approving unblocks this job, which downloads the plan
+  # artifact and runs `terraform apply the_plan` (which also performs
+  # `destroy` when the plan was `-destroy`).
+  apply:
+    if: ${{ inputs.action == 'plan_apply' || inputs.action == 'destroy' }}
+    needs: plan
+    environment: ${{ inputs.environ }}-apply
+    runs-on: self-hosted
+    env:
+      TF_VAR_environment: ${{ inputs.environ }}
+      TF_VAR_controller_password: ${{ secrets.CONTROLLER_ADMIN_PASSWORD }}
+      TF_VAR_controller_ip: ${{ secrets.CONTROLLER_IP }}
+      TF_VAR_aviatrix_account: ${{ secrets.AVIATRIX_ACCOUNT }}
+      TF_CLOUD_ORGANIZATION: ${{ secrets.TF_CLOUD_ORGANIZATION }}
+    defaults:
+      run:
+        working-directory: "workflow-tf-apply-approval"
+        shell: bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Download plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: tf-plan-${{ github.run_id }}
+          path: ${{ github.workspace }}
+
+      - name: Stage plan into working dir
+        run: |
+          cp "${{ github.workspace }}/workflow-tf-apply-approval/the_plan" ./the_plan || \
+            cp "${{ github.workspace }}/the_plan" ./the_plan
+
+      - name: Terraform Apply
+        run: terraform apply -compact-warnings the_plan | tee "${{ github.workspace }}/apply.out"
